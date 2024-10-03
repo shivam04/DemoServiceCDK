@@ -1,11 +1,13 @@
-import { Stack, StackProps, Stage} from 'aws-cdk-lib';
+import { CfnOutput, Stack, StackProps} from 'aws-cdk-lib';
 import { Vpc } from 'aws-cdk-lib/aws-ec2';
 import { Repository } from 'aws-cdk-lib/aws-ecr';
 import { Cluster, ContainerImage, FargateService, FargateTaskDefinition } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancer, ApplicationProtocol } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import { ManagedPolicy, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { CodeBuildStep, CodePipeline, CodePipelineSource } from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import { BuildSpec, LinuxBuildImage, PipelineProject } from 'aws-cdk-lib/aws-codebuild';
+import { Artifact, Pipeline } from 'aws-cdk-lib/aws-codepipeline';
+import { CodeBuildAction, EcsDeployAction, GitHubSourceAction } from 'aws-cdk-lib/aws-codepipeline-actions';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class DemoServiceCdkStack extends Stack {
@@ -57,39 +59,69 @@ export class DemoServiceCdkStack extends Stack {
       targets: [service],
     });
 
-    // IAM Role for CodeBuild to allow pushing Docker images to ECR
-    const codeBuildRole = new Role(this, 'CodeBuildRole', {
-      assumedBy: new ServicePrincipal('codebuild.amazonaws.com'),
+    // Retrieve the GitHub token from Secrets Manager
+    const githubToken = secretsmanager.Secret.fromSecretNameV2(this, 'GitHubToken', 'github-token');
+
+    const buildProject = new PipelineProject(this, "DemoServiceBuild", {
+      environment: {
+        buildImage: LinuxBuildImage.STANDARD_5_0,
+        privileged: true, // To allow Docker
+      },
+      environmentVariables: {
+        'REPOSITORY_URI': {
+          value: repository.repositoryUri,
+        },
+      },
+      buildSpec: BuildSpec.fromAsset('../asset/buildSpec.yml')
     });
 
-    codeBuildRole.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPowerUser'));
-
-    // CodePipeline for CI/CD
-    const pipeline = new CodePipeline(this, 'DemoServicePipeline', {
-      pipelineName: 'SpringBootPipeline',
-      synth: new CodeBuildStep('SynthStep', {
-        input: CodePipelineSource.gitHub('shivam04/DemoServiceSpringBoot', 'main'), // GitHub repo
-        commands: ['npm install -g aws-cdk', 'cdk synth'],
-      }),
-      role: codeBuildRole
+    repository.grantPull(buildProject.grantPrincipal);
+    const pipeline = new Pipeline(this, 'DemoServicePipeline', {
+      pipelineName: 'DemoServicePipeline',
     });
 
-    // CodeBuild step to build Docker image and push to ECR
-    const buildStep = new CodeBuildStep('DemoServiceBuildStep', {
-      input: pipeline.synth, 
-      commands: [
-        'echo Logging in to Amazon ECR...',
-        'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com',
-        'docker build -t springboot-app .',
-        'docker tag springboot-app:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/springboot-app:latest',
-        'docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/springboot-app:latest',
+    const sourceOutput = new Artifact();
+
+    pipeline.addStage({
+      stageName: 'Source',
+      actions: [
+        new GitHubSourceAction({
+          actionName: 'GitHubSource',
+          owner: 'shivam04',
+          repo: 'DemoServiceSpringBoot',
+          oauthToken: githubToken.secretValueFromJson('github-token'),
+          output: sourceOutput,
+          branch: 'main'
+        })
       ]
     });
 
-    const stage = pipeline.addStage(new Stage(this, "BuildAndDeploy", {
-      stageName: "BuildAndDeploy"
-    }));
+    const buildOutput = new Artifact();
+    pipeline.addStage({
+      stageName: 'Build',
+      actions: [
+        new CodeBuildAction({
+          actionName: 'CodeBuild',
+          project: buildProject,
+          input: sourceOutput,
+          outputs: [buildOutput],
+        })
+      ]
+    });
 
-    stage.addPost(buildStep);
+    pipeline.addStage({
+      stageName: "Deploy",
+      actions: [
+        new EcsDeployAction({
+          actionName: 'DeployToECS',
+          service: service,
+          input: buildOutput,
+        })
+      ]
+    })
+
+    new CfnOutput(this, "SemoServiceLoadBalancerDNS", {
+      value: loadBalancer.loadBalancerDnsName
+    });
   }
 }
