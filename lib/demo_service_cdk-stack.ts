@@ -75,6 +75,11 @@ export class DemoServiceCdkStack extends Stack {
       buildSpec: BuildSpec.fromObject({
         version: '0.2',
         phases: {
+          install: {
+            "runtime-versions": {
+              java: "latest"
+            }
+          },
           pre_build: {
             commands: [
               'echo Logging in to Amazon ECR...',
