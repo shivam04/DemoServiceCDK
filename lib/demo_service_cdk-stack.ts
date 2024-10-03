@@ -64,7 +64,7 @@ export class DemoServiceCdkStack extends Stack {
 
     const buildProject = new PipelineProject(this, "DemoServiceBuild", {
       environment: {
-        buildImage: LinuxBuildImage.STANDARD_5_0,
+        buildImage: LinuxBuildImage.AMAZON_LINUX_2_5,
         privileged: true, // To allow Docker
       },
       environmentVariables: {
@@ -94,14 +94,20 @@ export class DemoServiceCdkStack extends Stack {
               'docker push $REPOSITORY_URI:latest',
             ],
           },
+          post_build: {
+            commands: [
+              'echo imagedefinitions.json',
+              'printf \'[{ "name": "DemoServiceContainer", "imageUri": "%s" }]\' $REPOSITORY_URI:latest > imagedefinitions.json'
+            ]
+          }
         },
         artifacts: {
           files: ['**/*'],
         },
       }),
     });
-
-    repository.grantPull(buildProject.grantPrincipal);
+    
+    repository.grantPullPush(buildProject.grantPrincipal);
     const pipeline = new Pipeline(this, 'DemoServicePipeline', {
       pipelineName: 'DemoServicePipeline',
     });
@@ -146,7 +152,7 @@ export class DemoServiceCdkStack extends Stack {
       ]
     })
 
-    new CfnOutput(this, "SemoServiceLoadBalancerDNS", {
+    new CfnOutput(this, "DemoServiceLoadBalancerDNS", {
       value: loadBalancer.loadBalancerDnsName
     });
   }
