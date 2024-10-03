@@ -72,7 +72,28 @@ export class DemoServiceCdkStack extends Stack {
           value: repository.repositoryUri,
         },
       },
-      buildSpec: BuildSpec.fromAsset('../asset/buildSpec.yml')
+      buildSpec: BuildSpec.fromObject({
+        version: '0.2',
+        phases: {
+          pre_build: {
+            commands: [
+              'echo Logging in to Amazon ECR...',
+              'aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REPOSITORY_URI',
+            ],
+          },
+          build: {
+            commands: [
+              'echo Build started on `date`',
+              'mvn clean package',
+              'docker build -t $REPOSITORY_URI:latest .',
+              'docker push $REPOSITORY_URI:latest',
+            ],
+          },
+        },
+        artifacts: {
+          files: ['**/*'],
+        },
+      }),
     });
 
     repository.grantPull(buildProject.grantPrincipal);
