@@ -110,7 +110,7 @@ export class DemoServiceCdkStack extends Stack {
           actionName: 'GitHubSource',
           owner: 'shivam04',
           repo: 'DemoServiceSpringBoot',
-          oauthToken: githubToken.secretValueFromJson('github-token'),
+          oauthToken: githubToken.secretValue,
           output: sourceOutput,
           branch: 'main'
         })
